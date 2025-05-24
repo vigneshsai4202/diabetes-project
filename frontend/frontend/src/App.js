@@ -1,11 +1,26 @@
 import axios from 'axios';
 import { useState } from 'react';
 import jsPDF from 'jspdf';
+import BulkUploader from './BulkUploader';
 
 function App() {
   const [prediction, setPrediction] = useState(null);
   const [loading, setLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+  const [recommendations, setRecommendations] = useState(null);
+  const [bulkResults, setBulkResults] = useState([]);
+  const [bulkLoading, setBulkLoading] = useState(false);
+
+  const allowedHeaders = [
+    'gender',
+    'age',
+    'hypertension',
+    'heart_disease',
+    'smoking_history',
+    'bmi',
+    'HbA1c_level',
+    'blood_glucose_level'
+  ];
 
   const initialInput = {
     age: '',
@@ -53,24 +68,84 @@ function App() {
 
     setLoading(true);
     setPrediction(null);
+    setRecommendations(null);
 
     try {
       const res = await axios.post('http://localhost:8000/predict', input);
       setPrediction(res.data.prediction);
+      setRecommendations(res.data.lifestyle_recommendations);
     } catch (error) {
-      console.error('Prediction error:', error);
-      alert("Prediction failed. Make sure backend is running.");
+      console.error('Error:', error);
+      alert("Request failed. Ensure backend is running.");
     } finally {
       setLoading(false);
     }
   };
 
+  const handleBulkPredict = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    setBulkLoading(true);
+    const res = await axios.post('http://localhost:8000/bulk-predict-csv', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    });
+    setBulkResults(res.data);
+  } catch (error) {
+    console.error('Bulk Prediction Error:', error);
+    alert('Bulk prediction failed. Check backend.');
+  } finally {
+    setBulkLoading(false);
+  }
+};
+
+
   const handleReset = () => {
     setInput(initialInput);
     setPrediction(null);
+    setRecommendations(null);
   };
 
   const toggleDarkMode = () => setDarkMode(!darkMode);
+
+  const handleDownloadPDF = () => {
+    const doc = new jsPDF();
+    doc.setFontSize(16);
+    doc.text('Diabetes & CVD Risk Report', 20, 20);
+
+    doc.setFontSize(12);
+    let y = 40;
+    Object.entries(input).forEach(([key, value]) => {
+      doc.text(`${key.replace(/_/g, ' ')}: ${value}`, 20, y);
+      y += 10;
+    });
+
+    y += 10;
+    doc.setFontSize(14);
+    doc.setTextColor(prediction === "Diabetic" ? 'red' : 'green');
+    doc.text(`Prediction: ${prediction}`, 20, y);
+    y += 10;
+
+    doc.setTextColor('black');
+    if (recommendations?.cvd_risk_percent) {
+      doc.text(`Estimated 10-year CVD Risk: ${recommendations.cvd_risk_percent}`, 20, y);
+      y += 20;
+    }
+
+    if (recommendations) {
+      doc.setFontSize(14);
+      doc.text('Lifestyle Recommendations:', 20, y); y += 10;
+      doc.setFontSize(12);
+      doc.text(`Diet: ${recommendations.diet.join(', ')}`, 20, y); y += 10;
+      doc.text(`Exercise: ${recommendations.exercise.join(', ')}`, 20, y); y += 10;
+      doc.text(`Habits: ${recommendations.habits.join(', ')}`, 20, y); y += 10;
+    }
+
+    doc.save('diabetes_cvd_report.pdf');
+  };
 
   const themeStyles = {
     backgroundColor: darkMode ? '#121212' : '#f9f9f9',
@@ -98,35 +173,10 @@ function App() {
     display: 'block'
   };
 
-  const handleDownloadPDF = () => {
-    const doc = new jsPDF();
-    doc.setFontSize(16);
-    doc.text('Diabetes Prediction Report', 20, 20);
-    doc.setFontSize(12);
-    let y = 40;
-    Object.entries(input).forEach(([key, value]) => {
-      doc.text(`${key.replace(/_/g, ' ')}: ${value}`, 20, y);
-      y += 10;
-    });
-    doc.setFontSize(14);
-    y += 10;
-    doc.setTextColor(prediction === "Diabetic" ? 'red' : 'green');
-    doc.text(`Prediction: ${prediction}`, 20, y);
-    doc.save('diabetes_prediction_report.pdf');
-  };
-
   return (
     <div style={{ ...themeStyles, minHeight: '100vh', padding: '20px', fontFamily: 'Arial, sans-serif' }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'flex-start',
-        flexWrap: 'wrap',
-        gap: '40px'
-      }}>
-        {/* Form Section */}
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', flexWrap: 'wrap', gap: '40px' }}>
         <div style={{ maxWidth: '500px', flex: 1 }}>
-          {/* Dark Mode Toggle */}
           <div style={{ textAlign: 'right', marginBottom: '10px' }}>
             <button onClick={toggleDarkMode} style={{
               padding: '6px 10px',
@@ -143,38 +193,24 @@ function App() {
 
           <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>🩺 Diabetes Predictor</h2>
 
-          {[
-            { name: 'age', label: 'Age:' },
-            { name: 'bmi', label: 'BMI:' },
-            { name: 'HbA1c_level', label: 'HbA1c Level:' },
-            { name: 'blood_glucose_level', label: 'Blood Glucose Level:' }
-          ].map(({ name, label }) => (
+          {/* Input Fields */}
+          {['age', 'bmi', 'HbA1c_level', 'blood_glucose_level'].map((name) => (
             <div key={name}>
-              <label style={labelStyle}>{label}</label>
-              <input
-                type="number"
-                name={name}
-                value={input[name]}
-                onChange={handleChange}
-                style={inputStyle}
-              />
+              <label style={labelStyle}>{name.replace(/_/g, ' ')}:</label>
+              <input type="number" name={name} value={input[name]} onChange={handleChange} style={inputStyle} />
             </div>
           ))}
 
+          {/* Dropdown Fields */}
           {[
-            { name: 'gender', label: 'Gender', options: ['Female', 'Male'] },
-            { name: 'hypertension', label: 'Hypertension', options: ['No', 'Yes'] },
-            { name: 'heart_disease', label: 'Heart Disease', options: ['No', 'Yes'] },
-            { name: 'smoking_history', label: 'Smoking History', options: ['Never', 'Formerly', 'Currently', 'Ever', 'Unknown'] }
-          ].map(({ name, label, options }) => (
+            { name: 'gender', options: ['Female', 'Male'] },
+            { name: 'hypertension', options: ['No', 'Yes'] },
+            { name: 'heart_disease', options: ['No', 'Yes'] },
+            { name: 'smoking_history', options: ['Never', 'Formerly', 'Currently', 'Ever', 'Unknown'] }
+          ].map(({ name, options }) => (
             <div key={name}>
-              <label style={labelStyle}>{label}</label>
-              <select
-                name={name}
-                value={input[name]}
-                onChange={handleChange}
-                style={inputStyle}
-              >
+              <label style={labelStyle}>{name.replace(/_/g, ' ')}:</label>
+              <select name={name} value={input[name]} onChange={handleChange} style={inputStyle}>
                 <option value="">Select</option>
                 {options.map((option, index) => (
                   <option value={index} key={index}>{option}</option>
@@ -184,32 +220,22 @@ function App() {
           ))}
 
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '20px' }}>
-            <button
-              onClick={handlePredict}
-              style={{
-                padding: '10px 20px',
-                backgroundColor: '#1976d2',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Predict
-            </button>
-            <button
-              onClick={handleReset}
-              style={{
-                padding: '10px 20px',
-                backgroundColor: '#888',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Reset
-            </button>
+            <button onClick={handlePredict} style={{
+              padding: '10px 20px',
+              backgroundColor: '#1976d2',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}>Predict</button>
+            <button onClick={handleReset} style={{
+              padding: '10px 20px',
+              backgroundColor: '#888',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}>Reset</button>
           </div>
 
           {loading && (
@@ -243,62 +269,84 @@ function App() {
               }}>
                 {prediction === "Diabetic" ? '⚠️ Diabetic' : '✅ Not Diabetic'}
               </p>
-              <p style={{ marginTop: '10px', color: darkMode ? '#ccc' : '#555', fontSize: '14px' }}>
-                {prediction === "Diabetic"
-                  ? "Consider checking with a physician. A balanced diet, exercise, and regular monitoring help manage diabetes."
-                  : "Keep up the healthy habits and stay safe!"}
-              </p>
-              <button
-                onClick={handleDownloadPDF}
-                style={{
-                  marginTop: '15px',
-                  padding: '8px 16px',
-                  backgroundColor: '#4caf50',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer'
-                }}
-              >
+
+              {recommendations?.cvd_risk_percent && (
+                <p style={{ marginTop: '15px', fontSize: '15px', color: '#f39c12' }}>
+                  🫀 Estimated 10-Year CVD Risk: <strong>{recommendations.cvd_risk_percent}</strong>
+                </p>
+              )}
+
+              {recommendations && (
+                <div style={{
+                  marginTop: '20px',
+                  padding: '20px',
+                  borderRadius: '10px',
+                  textAlign: 'left',
+                  boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+                  ...cardStyles
+                }}>
+                  <h3>🧘 Lifestyle Recommendations</h3>
+                  <ul>
+                    <li><strong>Diet:</strong> {recommendations.diet.join(', ')}</li>
+                    <li><strong>Exercise:</strong> {recommendations.exercise.join(', ')}</li>
+                    <li><strong>Habits:</strong> {recommendations.habits.join(', ')}</li>
+                  </ul>
+                </div>
+              )}
+
+              <button onClick={handleDownloadPDF} style={{
+                marginTop: '15px',
+                padding: '8px 16px',
+                backgroundColor: '#4caf50',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}>
                 📄 Download PDF
               </button>
             </div>
           )}
-        </div>
 
-        {/* Side Image Section */}
-        <div style={{ flex: 1, minWidth: '250px', display: 'none', maxWidth: '400px' }} className="side-img">
-          <img
-            src="/Diabetes_share.jpg"
-            alt="Diabetes Awareness"
-            style={{
-              width: '100%',
-              borderRadius: '10px',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-              marginTop: '40px'
-            }}
-          />
-          <p style={{ textAlign: 'center', marginTop: '10px', color: darkMode ? '#ccc' : '#555' }}>
-            Stay informed. Early detection helps!
-          </p>
+          <BulkUploader onDataReady={handleBulkPredict} />
+
+          {bulkLoading && <p>🔄 Running bulk predictions...</p>}
+
+          {bulkResults.length > 0 && (
+            <div style={{ marginTop: '30px' }}>
+              <h3>📊 Bulk Prediction Results ({bulkResults.length})</h3>
+              <div style={{ overflowX: 'auto' }}>
+                <table border="1" cellPadding="5">
+                  <thead>
+                                       <tr>
+                      {allowedHeaders.map((header) => (
+                        <th key={header}>{header.replace(/_/g, ' ')}</th>
+                      ))}
+                      <th>Prediction</th>
+                      <th>CVD Risk</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkResults.map((result, index) => (
+                      <tr key={index}>
+                        {allowedHeaders.map((header) => (
+                          <td key={header}>{result[header]}</td>
+                        ))}
+                        <td style={{ color: result.prediction === 'Diabetic' ? 'red' : 'green', fontWeight: 'bold' }}>
+                          {result.prediction}
+                        </td>
+                        <td>
+                          {result?.lifestyle_recommendations?.cvd_risk_percent ?? 'N/A'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </div>
-
-      {/* Spinner animation */}
-      <style>
-        {`
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-
-          @media (min-width: 768px) {
-            .side-img {
-              display: block !important;
-            }
-          }
-        `}
-      </style>
     </div>
   );
 }
